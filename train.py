@@ -4,6 +4,7 @@ import argparse
 import numpy as np
 import ruamel.yaml as yaml
 import torch
+import torch.utils.data.dataloader
 import wandb 
 import logging 
 from logging import getLogger as get_logger
@@ -27,10 +28,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train a model.")
     
     # config file
-    parser.add_argument("--config", type=str, default='configs/ddpm.yaml', help="config file used to specify parameters")
+    parser.add_argument("--config", type=str, default="configs/ddpm.yaml", help="config file used to specify parameters")
 
     # data 
-    parser.add_argument("--data_dir", type=str, default='./data/imagenet100_128x128/train', help="data folder") 
+    parser.add_argument("--data_dir", type=str, default='./data/imagenet100_128x128', help="data folder") 
     parser.add_argument("--image_size", type=int, default=128, help="image size")
     parser.add_argument("--batch_size", type=int, default=4, help="per gpu batch size")
     parser.add_argument("--num_workers", type=int, default=8, help="batch size")
@@ -87,12 +88,12 @@ def parse_args():
         with open(args.config, 'r', encoding='utf-8') as f:
             file_yaml = yaml.YAML()
             config_args = file_yaml.load(f)
+            config_args = {k: v for k, v in config_args.items() if v} # filter out None values
             parser.set_defaults(**config_args)
     
     # re-parse command-line args to overwrite with any command-line inputs
     args = parser.parse_args()
     return args
-    
     
 def main():
     
@@ -124,9 +125,17 @@ def main():
     logger.info("Creating dataset")
     # TODO: use transform to normalize your images to [-1, 1]
     # TODO: you can also use horizontal flip
-    transform = None 
+    transform = transforms.Compose([
+        transforms.Resize((128, 128)),
+        transforms.ToTensor(), 
+        transforms.Normalize(mean=[0.5], std=[0.5]),
+        # # T.RandomHorizontalFlip(p=0.5)
+    ])
     # TOOD: use image folder for your train dataset
-    train_dataset = None 
+    train_dataset = datasets.ImageFolder(
+        args.data_dir + '/train', 
+        transform=transform
+    )
     
     # TODO: setup dataloader
     sampler = None 
@@ -136,20 +145,20 @@ def main():
     # TODO: shuffle
     shuffle = False if sampler else True
     # TODO dataloader
-    train_loader = None 
+    train_loader = torch.utils.data.DataLoader(train_dataset, args.batch_size, shuffle=shuffle, num_workers=args.num_workers, sampler=sampler) 
     
     # calculate total batch_size
     total_batch_size = args.batch_size * args.world_size 
     args.total_batch_size = total_batch_size
     
     # setup experiment folder
+    os.makedirs(args.output_dir, exist_ok=True)
     if args.run_name is None:
         args.run_name = f'exp-{len(os.listdir(args.output_dir))}'
     else:
         args.run_name = f'exp-{len(os.listdir(args.output_dir))}-{args.run_name}'
     output_dir = os.path.join(args.output_dir, args.run_name)
     save_dir = os.path.join(output_dir, 'checkpoints')
-    os.makedirs(args.output_dir, exist_ok=True)
     if is_primary(args):
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(save_dir, exist_ok=True)
@@ -163,7 +172,16 @@ def main():
     logger.info(f"Number of parameters: {num_params / 10 ** 6:.2f}M")
     
     # TODO: ddpm shceduler
-    scheduler = DDPMScheduler(None)
+    scheduler = DDPMScheduler(
+        num_train_timesteps=args.num_train_timesteps, 
+        beta_start=args.beta_start, 
+        beta_end=args.beta_end, 
+        beta_schedule=args.beta_schedule, 
+        variance_type=args.variance_type, 
+        prediction_type=args.prediction_type, 
+        clip_sample=args.clip_sample, 
+        clip_sample_range=args.clip_sample_range
+    )
     
     # NOTE: this is for latent DDPM 
     vae = None
@@ -188,10 +206,10 @@ def main():
         class_embedder = class_embedder.to(device)
     
     # TODO: setup optimizer
-    optimizer = None 
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay) 
     # TODO: setup scheduler
-    scheduler = None 
-    
+    scheduler.set_timesteps(num_inference_steps=args.num_inference_steps, device=device)
+
     # max train steps
     num_update_steps_per_epoch = len(train_loader)
     args.max_train_steps = args.num_epochs * num_update_steps_per_epoch
@@ -217,7 +235,7 @@ def main():
     
     # TODO: setup evaluation pipeline
     # NOTE: this pipeline is not differentiable and only for evaluatin
-    pipeline = DDPMPipeline(None)
+    pipeline = DDPMPipeline(unet=unet, scheduler=scheduler, vae=vae, class_embedder=class_embedder)
     
     
     # dump config file
@@ -264,18 +282,18 @@ def main():
         loss_m = AverageMeter()
         
         # TODO: set unet and scheduelr to train
-        unet
-        scheduler 
+        unet.train()
+        scheduler.train()
         
         
         # TODO: finish this
-        for step, (None, labels) in enumerate(train_loader):
+        for step, (images, labels) in enumerate(train_loader):
             
             batch_size = images.size(0)
             
             # TODO: send to device
-            images = None 
-            labels = None 
+            images = images.to(device, non_blocking=True) 
+            labels = labels.to(device, non_blocking=True) 
             
             
             # NOTE: this is for latent DDPM 
@@ -286,7 +304,7 @@ def main():
                 images = images * 0.1845
             
             # TODO: zero grad optimizer
-            
+            optimizer.zero_grad()
             
             # NOTE: this is for CFG
             if class_embedder is not None:
@@ -297,22 +315,22 @@ def main():
                 class_emb = None
             
             # TODO: sample noise 
-            noise = None  
-            
+            noise = torch.randn(images[0].shape, device=device) 
+
             # TODO: sample timestep t
-            timesteps = None 
+            timesteps = torch.randperm(scheduler.timesteps)[0:batch_size].to(device)
             
             # TODO: add noise to images using scheduler
-            noisy_images = None 
+            noisy_images = scheduler.add_noise(images, noise, timesteps)
             
             # TODO: model prediction
-            model_pred = None 
+            model_pred = unet.forward(noisy_images, timesteps, class_emb)
             
             if args.prediction_type == 'epsilon':
                 target = noise 
             
             # TODO: calculate loss
-            loss = None 
+            loss = torch.nn.functional.mse_loss(model_pred, noisy_images)
             
             # record loss
             loss_m.update(loss.item())
@@ -324,7 +342,7 @@ def main():
                 pass 
             
             # TODO: step your optimizer
-            optimizer
+            optimizer.step()
             
             progress_bar.update(1)
             
@@ -347,7 +365,12 @@ def main():
             gen_images = pipeline(None) 
         else:
             # TODO: fill pipeline
-            gen_images = pipeline(None) 
+            gen_images = pipeline(
+                batch_size=batch_size, 
+                num_inference_steps=args.num_inference_steps, 
+                generator=generator,
+                device=device
+            ) 
             
         # create a blank canvas for the grid
         grid_image = Image.new('RGB', (4 * args.image_size, 1 * args.image_size))
