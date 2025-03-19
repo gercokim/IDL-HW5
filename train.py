@@ -175,7 +175,8 @@ def main():
     
     # TODO: ddpm shceduler
     scheduler = DDPMScheduler(
-        num_train_timesteps=args.num_train_timesteps, 
+        num_train_timesteps=args.num_train_timesteps,
+        num_inference_steps=args.num_inference_steps, 
         beta_start=args.beta_start, 
         beta_end=args.beta_end, 
         beta_schedule=args.beta_schedule, 
