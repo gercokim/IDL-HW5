@@ -37,7 +37,7 @@ class DDIMScheduler(DDPMScheduler):
         beta_prod_t_prev = 1 - alpha_prod_t_prev
         
         # TODO: DDIM equation for variance
-        variance = beta_prod_t_prev / beta_prod_t * (1 - alpha_prod_t / alpha_prod_t_prev)
+        variance = (beta_prod_t_prev / beta_prod_t) * (1 - alpha_prod_t / alpha_prod_t_prev)
 
         return variance
     
@@ -110,7 +110,7 @@ class DDIMScheduler(DDPMScheduler):
         std_dev_t = eta * variance.sqrt()
 
         # TODO: 5. compute "direction pointing to x_t" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
-        pred_sample_direction = (1 - alpha_prod_t_prev - std_dev_t ** 2) * pred_epsilon
+        pred_sample_direction = (1 - alpha_prod_t_prev - std_dev_t ** 2).sqrt() * pred_epsilon
 
         # TODO: 6. compute x_t without "random noise" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
         prev_sample = alpha_prod_t_prev.sqrt() * pred_original_sample + pred_sample_direction

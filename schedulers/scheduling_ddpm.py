@@ -104,7 +104,7 @@ class DDPMScheduler(nn.Module):
         if self.num_inference_steps:
             i = torch.where(self.timesteps == timestep)[0].item()
             if i == self.timesteps.shape[0] - 1:
-                prev_t = -1
+                prev_t = torch.tensor(-1)
             else:
                 prev_t = self.timesteps[i + 1]
         else:
